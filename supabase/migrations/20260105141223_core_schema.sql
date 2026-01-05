@@ -175,3 +175,55 @@ create trigger audit_events_no_truncate
   before truncate on audit.events
   for each statement execute function audit.reject_mutation();
 
+-- privileges -----------------------------------------------------------------
+-- Supabase grants broad default privileges on new public tables; replace them with
+-- the minimum each role needs.
+
+revoke all on all tables in schema public from anon, authenticated;
+revoke all on all tables in schema audit from anon, authenticated, public;
+revoke all on all sequences in schema public from anon, authenticated;
+
+grant select on all tables in schema public to authenticated;
+grant usage on schema audit to authenticated;
+grant select on audit.events to authenticated;
+
+grant select, insert, update on all tables in schema public to agent_worker;
+grant insert, select on audit.events to agent_worker;
+grant delete on public.phone_numbers to agent_worker;
+
+-- row level security ---------------------------------------------------------
+
+do $$
+declare
+  t record;
+  owner_column text;
+begin
+  for t in
+    select schemaname, tablename from pg_tables
+    where (schemaname = 'public' and tablename in (
+            'profiles', 'phone_numbers', 'user_settings', 'conversations', 'messages',
+            'tasks', 'task_events', 'llm_calls', 'usage_records'))
+       or (schemaname = 'audit' and tablename = 'events')
+  loop
+    owner_column := case when t.tablename = 'profiles' then 'id' else 'user_id' end;
+
+    execute format('alter table %I.%I enable row level security', t.schemaname, t.tablename);
+
+    -- The signed-in user reads only their own rows ...
+    execute format(
+      'create policy owner_read on %I.%I for select to authenticated using (%I = (select auth.uid()))',
+      t.schemaname, t.tablename, owner_column);
+
+    -- ... and only after completing MFA. Restrictive: ANDed with every other policy.
+    execute format(
+      'create policy require_mfa on %I.%I as restrictive to authenticated '
+      'using ((select auth.jwt() ->> ''aal'') = ''aal2'')',
+      t.schemaname, t.tablename);
+
+    -- The worker acts for the (single) owner; its table grants above bound what it can do.
+    execute format(
+      'create policy worker_all on %I.%I for all to agent_worker using (true) with check (true)',
+      t.schemaname, t.tablename);
+  end loop;
+end;
+$$;
