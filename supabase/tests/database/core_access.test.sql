@@ -50,5 +50,18 @@ select throws_ok($$select 1 from public.tasks$$, '42501', null, 'anon has no tab
 reset role;
 set local role agent_worker;
 -- Scoped to this test's users: other suites (e.g. dashboard e2e) may leave rows behind.
+select is(
+  (select count(*)::int from public.tasks where user_id in (
+    '00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-00000000000b')),
+  2, 'worker sees every user''s tasks');
+select lives_ok(
+  $$insert into audit.events (actor, action) values ('worker', 'test')$$, 'worker can append audit events');
+select throws_ok($$delete from audit.events$$, '42501', null, 'worker cannot delete audit events');
+
+-- Not even the table owner can mutate audit history.
+reset role;
+select throws_ok(
+  $$update audit.events set action = 'tampered'$$, '42501', null, 'owner cannot update audit events');
+
 select * from finish();
 rollback;
