@@ -1,0 +1,26 @@
+[
+  {
+    "secret": "test-secret",
+    "timestamp": 1794380000,
+    "method": "POST",
+    "path": "/v1/sms/inbound",
+    "body_utf8": "{\"body\":\"pause T3\"}",
+    "signature": "v1=06909cc0d4e3fbed8a2ba6eb9bd30cc321b2d89140ca11061734c8678df0ebcb"
+  },
+  {
+    "secret": "test-secret",
+    "timestamp": 1794380000,
+    "method": "post",
+    "path": "/v1/tasks",
+    "body_utf8": "",
+    "signature": "v1=57277b6f93916ee228aae9ae951e4b07e4a68e1e4978a0f69163a16ace419f97"
+  },
+  {
+    "secret": "another secret with spaces",
+    "timestamp": 1794380123,
+    "method": "POST",
+    "path": "/v1/calls/start",
+    "body_utf8": "{\"caller\":\"+14165550123\",\"note\":\"café\"}",
+    "signature": "v1=629af6e6d6861eb9b06f1bee251b4a0b5fe9e707889846e90d5e7807a50f4f24"
+  }
+]
