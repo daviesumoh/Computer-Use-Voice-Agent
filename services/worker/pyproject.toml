@@ -1,0 +1,66 @@
+[project]
+name = "agent-worker"
+version = "0.1.0"
+description = "Browser and task worker for the computer-use voice agent."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "agent-common",
+  "playwright==1.50.0",
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.7,<3",
+  "logfire>=3.0,<4",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "psycopg[binary,pool]>=3.2,<4",
+  "httpx>=0.28,<1",
+]
+
+[project.scripts]
+browser-smoke = "worker.browser_smoke:main"
+worker-api = "worker.api:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.25",
+  "ruff>=0.9",
+  "mypy>=1.14",
+]
+
+[tool.uv.sources]
+agent-common = { path = "../common", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/worker"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S", "SIM", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S603"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["worker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+addopts = "-m 'not live and not load'"
+markers = [
+  "live: calls external services (OpenAI) and costs a few cents",
+  "load: concurrent-call and multi-task load checks",
+]
