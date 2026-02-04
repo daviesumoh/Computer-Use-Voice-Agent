@@ -1,0 +1,57 @@
+[project]
+name = "voice"
+version = "0.1.0"
+description = "Phone-call voice agent (LiveKit) for the computer-use agent"
+authors = [
+    { name = "Davies", email = "daviesumoh000@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "agent-common",
+    "httpx>=0.28.1",
+    "livekit-agents[deepgram,openai,silero]~=1.0.0",
+    "livekit-plugins-noise-cancellation~=0.2.0",
+    "pydantic-settings>=2.7.0",
+]
+
+[project.scripts]
+voice = "voice:main"
+
+[build-system]
+requires = ["uv_build>=0.6.0,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.14.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+    "ruff>=0.9.0",
+    "worker",
+]
+
+[tool.uv.sources]
+agent-common = { path = "../common", editable = true }
+worker = { path = "../worker", editable = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "BLE"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+mypy_path = "src:../common/src:../worker/src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "../common/src", "../worker/src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[[tool.mypy.overrides]]
+module = ["bitwarden_sdk", "pywebpush"]
+ignore_missing_imports = true  # reached through the worker package; ships no type information
