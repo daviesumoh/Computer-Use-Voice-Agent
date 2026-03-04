@@ -13,6 +13,7 @@ dependencies = [
   "uvicorn>=0.34,<1",
   "psycopg[binary,pool]>=3.2,<4",
   "httpx>=0.28,<1",
+  "dbos==1.6.0",
 ]
 
 [project.scripts]
