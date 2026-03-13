@@ -163,3 +163,47 @@ async def test_a_task_pauses_when_the_monthly_cap_is_reached_and_stays_paused_on
     scripted(harness, [StepResult(1, finished=True)])
     user = make_user()
     harness.admin.execute(
+        "insert into public.user_settings (user_id, monthly_cost_cap_cents) values (%s, 100)",
+        (user.id,),
+    )
+    harness.admin.execute(
+        "insert into public.llm_calls (user_id, route, model, input_tokens, output_tokens, "
+        "latency_ms, cost_cents) values (%s, 'browser_decide', 'm', 1, 1, 1, 150)",
+        (user.id,),
+    )
+    task_id = harness.new_task(user)
+
+    await harness.engine.enqueue(task_id)
+    await eventually(lambda: harness.status(task_id)["status"] == "paused", "the pause")
+    harness.instruct(task_id, "resume")
+    await harness.engine.wake(task_id)
+    await eventually(
+        lambda: any("cap is reached; T" in body for _, body in harness.texts), "the refusal"
+    )
+
+    assert harness.executed == []  # nothing ran past the cap
+    assert harness.status(task_id)["status"] == "paused"
+    assert "monthly_cap" in harness.events(task_id)
+    assert any("monthly spending cap is reached" in body for _, body in harness.texts)
+
+
+async def test_a_task_pauses_after_its_working_time_and_resume_grants_more(
+    harness: Harness, make_user: Callable[..., User], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(limits, "MAX_ACTIVE_SECONDS", 1)
+
+    async def slow_step(task_id: UUID) -> StepResult:
+        harness.executed.append(task_id)
+        await asyncio.sleep(1.1)
+        return StepResult(1, finished=len(harness.executed) == 2)
+
+    harness.runtime.executor = slow_step
+    task_id = harness.new_task(make_user())
+
+    await harness.engine.enqueue(task_id)
+    await eventually(lambda: harness.status(task_id)["status"] == "paused", "the time-limit pause")
+    assert harness.events(task_id)[-1] == "time_limit"
+
+    harness.instruct(task_id, "resume")
+    await harness.engine.wake(task_id)
+    await eventually(lambda: harness.status(task_id)["status"] == "completed", "completion")
