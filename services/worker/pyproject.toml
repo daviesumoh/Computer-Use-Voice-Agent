@@ -14,6 +14,7 @@ dependencies = [
   "psycopg[binary,pool]>=3.2,<4",
   "httpx>=0.28,<1",
   "dbos==1.6.0",
+  "openai>=1.65,<2",
 ]
 
 [project.scripts]
