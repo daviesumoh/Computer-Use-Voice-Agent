@@ -160,3 +160,229 @@ async def test_a_failing_action_is_retried_then_reported_back_to_the_model(
     for _ in range(4):
         await executor(task_id)
 
+    failed = events(admin, task_id, "step_failed")
+    assert len(failed) == 1 and failed[0]["summary"].startswith("could not click")
+    assert decider.briefs[2].history[-1].startswith("could not click")  # the model was told
+    assert events(admin, task_id, "step")[-1]["summary"].endswith("/products")
+
+
+async def test_repeating_the_same_action_ends_the_task(
+    make_executor: Callable[..., BrowserExecutor], new_task: Callable[[], UUID], site: Site
+) -> None:
+    scroll = Scroll(kind="scroll", direction="down")
+    executor = make_executor(
+        ScriptedDecider([Navigate(kind="navigate", url=site.url("/products")), *[scroll] * 5])
+    )
+    task_id = new_task()
+    for _ in range(4):
+        await executor(task_id)
+    with pytest.raises(TaskFailure) as stopped:
+        await executor(task_id)
+    assert stopped.value.error_class == "loop_detected"
+
+
+async def test_a_run_of_steps_that_cannot_act_ends_the_task_as_stuck(
+    make_executor: Callable[..., BrowserExecutor], new_task: Callable[[], UUID], site: Site
+) -> None:
+    plan: list[Plan] = [Navigate(kind="navigate", url=site.url("/overlay"))]
+    plan += [
+        Type(kind="type", ref="e999", text=str(i)) for i in range(5)
+    ]  # a ref that is not there
+    executor, task_id = make_executor(ScriptedDecider(plan)), new_task()
+    for _ in range(6):
+        await executor(task_id)
+    with pytest.raises(TaskFailure) as stopped:
+        await executor(task_id)
+    assert stopped.value.error_class == "stuck"
+
+
+async def test_a_site_that_demands_human_verification_parks_the_task_with_its_browser_open(
+    make_executor: Callable[..., BrowserExecutor], new_task: Callable[[], UUID], site: Site
+) -> None:
+    executor = make_executor(
+        ScriptedDecider([Navigate(kind="navigate", url=site.url("/challenge"))])
+    )
+    task_id = new_task()
+    with pytest.raises(WaitForUser) as parked:
+        await executor(task_id)
+    assert parked.value.reason == "login"
+    # The owner will take over this very page, so the browser must still be there.
+    session = executor.session_for(task_id)
+    assert session is not None
+    assert session.page.url.endswith("/challenge")
+
+
+async def test_a_restarted_worker_resumes_on_the_page_where_the_task_was(
+    make_executor: Callable[..., BrowserExecutor],
+    new_task: Callable[[], UUID],
+    site: Site,
+) -> None:
+    task_id = new_task()
+    first = make_executor(ScriptedDecider([Navigate(kind="navigate", url=site.url("/product/1"))]))
+    await first(task_id)
+    await first.release(task_id)  # the process dies: its browser and memory are gone
+
+    decider = ScriptedDecider([Back(kind="back")])
+    await make_executor(decider)(task_id)  # a new process, same database
+
+    resumed = decider.briefs[0]
+    assert resumed.observation.url.endswith("/product/1")
+    assert resumed.history == [f"opened {site.url('/product/1')}"]
+
+
+async def test_a_destination_on_the_internal_network_is_refused_for_good(
+    pool: Pool, new_task: Callable[[], UUID]
+) -> None:
+    executor = BrowserExecutor(
+        pool,
+        ScriptedDecider(
+            [Navigate(kind="navigate", url="http://169.254.169.254/latest/meta-data/")]
+        ),
+        headless=True,
+        retry_delays=(0, 0),
+    )
+    task_id = new_task()
+    try:
+        with pytest.raises(TaskFailure) as refused:
+            await executor(task_id)
+        assert refused.value.error_class == "unreachable"
+    finally:
+        await executor.release(task_id)
+
+
+async def test_the_engine_drives_a_browser_task_to_a_texted_answer(
+    pool: Pool,
+    make_user: Callable[..., User],
+    admin: psycopg.Connection[DictRow],
+    site: Site,
+) -> None:
+    if admin.execute("select to_regclass('dbos.workflow_status') as t").fetchone() == {
+        "t": "dbos.workflow_status"
+    }:
+        admin.execute("truncate dbos.workflow_status cascade")
+    texts: list[str] = []
+
+    async def notify(user_id: UUID, dedupe_key: str, body: str) -> None:
+        texts.append(body)
+
+    decider = ScriptedDecider(
+        [
+            Navigate(kind="navigate", url=site.url("/products")),
+            Done(kind="done", result="Cheapest: Borealis 50 TV at $429.00"),
+        ]
+    )
+    executor = BrowserExecutor(pool, decider, headless=True, allow_private_hosts=True)
+    runtime = Runtime(pool=pool, notify=notify, executor=executor, release=executor.release)
+    engine = Engine(runtime, WORKER_DSN)
+    await engine.start()
+    try:
+        row = admin.execute(
+            "insert into public.tasks (user_id, short_code, title, spec, status, budget_cents) "
+            "values (%s, 'T9', 'Cheapest TV', '{}', 'queued', 300) returning id",
+            (make_user().id,),
+        ).fetchone()
+        assert row is not None
+        task_id = UUID(str(row["id"]))
+
+        await engine.enqueue(task_id)
+        await eventually(
+            lambda: (
+                admin.execute(
+                    "select status from public.tasks where id = %s", (task_id,)
+                ).fetchone()
+                == {"status": "completed"}
+            ),
+            "completion",
+            timeout=30,
+        )
+    finally:
+        engine.stop()
+
+    assert texts == ["T9 done. Cheapest: Borealis 50 TV at $429.00"]
+    spent = admin.execute("select spent_cents from public.tasks where id = %s", (task_id,))
+    assert spent.fetchone() == {"spent_cents": 2}  # two model calls, a cent each
+    assert executor._runs == {}
+
+
+async def test_a_browser_that_dies_mid_task_is_replaced_and_the_task_carries_on(
+    make_executor: Callable[..., BrowserExecutor],
+    new_task: Callable[[], UUID],
+    site: Site,
+    admin: psycopg.Connection[DictRow],
+) -> None:
+    decider = ScriptedDecider(
+        [
+            Navigate(kind="navigate", url=site.url("/products")),
+            Done(kind="done", result="Found them."),
+        ]
+    )
+    executor, task_id = make_executor(decider), new_task()
+    await executor(task_id)
+    browser = executor._runs[task_id].session._browser
+    assert browser is not None
+    await browser.close()  # what a crashed Chromium looks like to the worker
+
+    lost = await executor(task_id)
+    finished = await executor(task_id)
+
+    assert (lost.cost_cents, lost.finished) == (0, False)
+    assert finished.finished and finished.summary == "Found them."
+    failed = events(admin, task_id, "step_failed")
+    assert [f["summary"].startswith("lost the page") for f in failed] == [True]
+    # The new browser went back to where the old one was.
+    assert decider.briefs[-1].observation.url == site.url("/products")
+
+
+async def test_a_browser_left_behind_by_an_ended_task_is_closed_and_live_ones_are_not(
+    make_executor: Callable[..., BrowserExecutor],
+    new_task: Callable[[], UUID],
+    site: Site,
+    admin: psycopg.Connection[DictRow],
+) -> None:
+    executor = make_executor(
+        ScriptedDecider([Navigate(kind="navigate", url=site.url("/products"))] * 2)
+    )
+    ended, running = new_task(), new_task()
+    await executor(ended)
+    await executor(running)
+    admin.execute("update public.tasks set status = 'cancelled' where id = %s", (ended,))
+
+    closed = await executor.reap()
+
+    assert closed == 1
+    assert set(executor._runs) == {running}
+    assert await executor.reap() == 0
+
+
+async def test_what_the_owner_said_by_text_or_voice_reaches_the_model(
+    make_executor: Callable[..., BrowserExecutor],
+    new_task: Callable[[], UUID],
+    admin: psycopg.Connection[DictRow],
+) -> None:
+    task_id = new_task()
+    admin.execute(
+        "update public.tasks set spec = spec || %s::jsonb where id = %s",
+        ('{"owner_edits": [{"channel": "sms", "text": "skip Amazon"}]}', task_id),
+    )
+    for seq, (kind, summary) in enumerate(
+        [
+            ("owner_edit", "the owner said by text: skip Amazon"),
+            ("owner_answer", "the owner answered: no, it failed"),
+        ],
+        1,
+    ):
+        admin.execute(
+            "insert into public.task_events (task_id, user_id, seq, type, payload) "
+            "select id, user_id, %s, %s, %s::jsonb from public.tasks where id = %s",
+            (seq, kind, f'{{"summary": "{summary}"}}', task_id),
+        )
+    decider = ScriptedDecider([Done(kind="done", result="ok")])
+
+    await make_executor(decider)(task_id)
+
+    brief = decider.briefs[0]
+    assert brief.spec["owner_edits"][0]["text"] == "skip Amazon"
+    assert brief.history == [
+        "the owner said by text: skip Amazon",
+        "the owner answered: no, it failed",
+    ]
