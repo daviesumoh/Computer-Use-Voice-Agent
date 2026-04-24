@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No code path may place phone calls (product rule)
+        run: |
+          if grep -rnE "calls\.create|\.calls\(" --include='*.py' --include='*.ts' --include='*.tsx' \
+               --exclude-dir=node_modules --exclude-dir=.venv .; then
+            echo "Outbound call API usage found" >&2
+            exit 1
+          fi
+
+  common:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/common
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.6.3
+      - run: uv sync --frozen
+      - run: uv run ruff check . && uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest
+
+  # Database, worker, voice agent and dashboard together: their integration tests
+  # (voice -> worker, web -> worker -> Postgres) share one local Supabase stack.
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      # Cloudflare's public always-pass Turnstile test secret, for the local Supabase only.
+      SUPABASE_AUTH_CAPTCHA_SECRET: 1x0000000000000000000000000000000AA
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.20.5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.6.3
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: apps/web/.nvmrc
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Start local Supabase
+        run: supabase start -x studio,inbucket,imgproxy,edge-runtime,logflare,vector,supavisor
+      - name: Database access-control tests
+        run: supabase test db
+
+      - name: Worker checks and tests
+        working-directory: services/worker
+        run: |
+          uv sync --frozen
+          uv run ruff check . && uv run ruff format --check .
+          uv run mypy
+          uv run playwright install --with-deps chromium
+          uv run pytest
+
+      - name: Voice agent checks and tests
+        working-directory: services/voice
+        run: |
+          uv sync --frozen
+          uv run ruff check . && uv run ruff format --check .
+          uv run mypy
+          uv run pytest
+
+      - name: Dashboard env from the local stack
+        run: |
+          eval "$(supabase status -o env)"
+          {
+            echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL"
+            echo "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$PUBLISHABLE_KEY"
+            echo "NEXT_PUBLIC_TURNSTILE_SITE_KEY=1x00000000000000000000AA"
+            echo "NEXT_PUBLIC_WORKER_URL=http://127.0.0.1:8100"
+          } > apps/web/.env.local
+          echo "SUPABASE_SECRET_KEY=$SECRET_KEY" >> "$GITHUB_ENV"
+          echo "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$PUBLISHABLE_KEY" >> "$GITHUB_ENV"
+      - name: Dashboard checks and tests
+        working-directory: apps/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+          pnpm next build
+          pnpm exec playwright install --with-deps chromium
+          pnpm test:e2e
