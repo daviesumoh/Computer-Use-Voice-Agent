@@ -1,7 +1,81 @@
-# Decisions
+parsed. Passwords therefore never pass through Vercel. Service-to-service calls (voice agent,
+SMS webhook) keep the HMAC signing.
 
-One entry per decision or dependency, with the reason. Newest first.
+**Approval = one action on one page.** `intent_hash` covers the target's role and name, the
+Url path and the money amounts shown on the page, so an approval for a $214.37 total is not
+spent on a $219.99 one. It is spent exactly once (`consume` is a conditional UPDATE; a
+5-way race test shows one winner), expires after 30 minutes, and the task waits with its
+browser kept open. The model is told when the owner declined or the request lapsed.
 
+**Action ledger.** Before an irreversible action (submit, purchase, send, delete, settings),
+a `started` row is claimed under a unique index. A second attempt finds it and does nothing.
+If the page cannot confirm the outcome (the site took the order but answered too late), the
+row becomes `unknown`: the owner is asked and nothing retries it. Only a failure before the
+page was touched, which proves nothing happened, frees the slot. Reconciliation by reading a
+site's order history is not built; the owner is the reconciler.
+
+**Passwords.** Stored in Bitwarden Secrets Manager (`bitwarden-sdk` 2.1.0, synchronous, so
+called in threads); the database keeps an opaque reference. The model names an account and a
+field (`fill_secret`), never a value. Before typing, code checks the page origin, the origin
+of the frame holding the field, and that it is a real input of the right kind. A mismatch
+(a look-alike login page, or a form framed from another site) ends the task as
+`security_incident` and is audited. Passwords are masked in everything the model or the logs
+could see, and a URL containing one is refused. Verified with the Bitwarden SDK installed;
+**not yet run against a real Bitwarden account** (needs an access token).
+`UnknownSiteError`: a task naming a site with no saved login does not start.
+
+**Saved logins** are the browser's cookies and storage, AES-256-GCM encrypted with the account
+id as associated data (a blob cannot be moved to another account), only for that account's
+origins. Key is an environment secret (`WORKER_SESSION_KEY`), and the ciphertext sits in
+Postgres; both are simpler and equally private. An undecryptable blob means logging in again,
+not a failed task.
+
+**Takeover.** A task parked on a login, CAPTCHA or MFA keeps its Chromium. The dashboard
+asks for a single-use 60-second token (stored only as a hash), opens a WebSocket (checked
+against the dashboard's Origin, one viewer per task), receives CDP screencast frames and sends
+mouse and keyboard input. Nothing typed is logged: the websocket library logs frame contents
+at DEBUG, so those loggers are silenced in `configure_logging` (a test caught this).
+Pressing Done saves the login and returns the task to the agent.
+
+**Bugs the tests found in earlier work:** the default Supabase table grants silently
+overrode column-level privileges (a new revoke-then-grant block fixes it, and `instructions`
+too); `audit.events`' `on delete set null` made deleting any user with audit rows fail
+(the foreign key is gone; the log keeps the id).
+
+**Red team.** 63 tests: 13 injection phrasings x 4 purchase controls (a named button, a
+"Yes!" and a "Complete" button in POST forms, a link) in rotating hiding styles, against a
+stand-in model that obeys the page; dangerous URLs (file:, javascript:, metadata IP,
+localhost); password leaks through a URL or a look-alike origin. Result: no unauthorised
+action, no leaked secret. Removing the POST-form check makes all 26 disguised-label cases
+fail. Known limit: a button whose label is harmless and that acts through JavaScript
+(`fetch`) rather than a form is not detectable in code; a real model is a second line there.
+
+Dependencies: `cryptography` (AES-GCM), `bitwarden-sdk` (secret storage).
+
+
+## 2026-04-20 — Browser tasks (read-only): Playwright AI snapshots, typed actions, code-side policy
+
+The model never writes selectors or scripts. Each turn it sees an accessibility snapshot
+from Playwright's AI mode (`page.aria_snapshot(mode="ai")`): every node has a `ref`,
+including nodes inside shadow roots and iframes (verified in `tests/browser`), and
+`aria-ref=<ref>` resolves it. That replaces a custom element walker.
+
+- **Pre-flight.** Before an action, the ref is re-checked against a fresh snapshot. If the
+  page re-rendered, the same role and name is accepted only when exactly one node matches;
+  two matches or none is reported to the model, never guessed. Playwright's own click checks
+  (visible, enabled, not covered) do the rest; an overlay-blocked click fails and is retried.
+- **Policy** (`browser/policy.py`) classifies each action from the target's role and name and
+  compares it with the task's scope. By default the scope is read, navigate, fill_form: no
+  purchase, send, delete, sign-in or settings change without explicit approval.
+  A test has the scripted model obey a page that says "press Buy now"; nothing is bought.
+  Classification rounds up (unknown target, Enter outside a search box).
+- **Destinations.** `browser/guard.py` refuses non-http(s) URLs and hosts that resolve to
+  loopback, private or link-local addresses (e.g. the cloud metadata endpoint), for
+  navigation and for every sub-request and redirect. Challenge pages and HTTP 403/429/456
+  end the task as `needs_user`; nothing tries to get around them.
+- **State.** The browser lives in memory; everything the model needs is rebuilt from
+  `task_events` (`step`, `step_failed`, `denied`), so a restarted worker reopens the last URL.
+  A paused, cancelled or finished task closes its Chromium, which matters on a 1.5 GB host.
 - **Guards.** Same action 3 times → `loop_detected`; 5 steps in a row that cannot act →
   `stuck`; 150 steps per task (engine). Recoverable failures retry 3 times (1 s, 4 s, 15 s).
 - **Cost.** Every model call writes `llm_calls` (tokens, latency, cost); the task's budget
@@ -34,6 +108,55 @@ Measured with `services/worker` `browser-smoke` (headed Chromium, fonts/media bl
 Docker with CPU/memory limits matching each plan, against walmart.ca, canadiantire.ca and
 theweathernetwork.com:
 
+| Limits | p95 page load | Peak memory | Result |
+|---|---|---|---|
+| 0.5 vCPU / 1 GB (nf-compute-50, $12) | 15.6 s | 1,026 MB | 1 timeout, memory at ceiling |
+| 0.5 vCPU / 1.5 GB (custom, ~$15) | 17.3 s | 1,250 MB | all pages load, slowly |
+| 1 vCPU / 2 GB (nf-compute-100-2, $24) | 6.0 s | 998 MB | passes |
+
+Chose the free Sandbox ($20/mo allowance) over paid options, accepting 10–18 s page loads.
+Target 0.5 vCPU / 1.5 GB if custom plans are available on the Sandbox (unverified), else
+nf-compute-50. Consequences: one browser task at a time; navigation timeouts of 60 s.
+Revisit if task failure rates from timeouts are high: 1 vCPU / 2 GB is the measured fix.
+
+
+## 2026-03-22 — Headed Chromium on Xvfb, not headless
+
+Headless Chromium identifies itself as `HeadlessChrome`; from a residential IP,
+walmart.ca (HTTP 456), canadiantire.ca (aborted) and bestbuy.ca (403) refused it, and
+amazon.ca served a challenge page. Headed Chromium loaded walmart.ca and canadiantire.ca
+fully. amazon.ca and bestbuy.ca still challenge it; those need user takeover. Faking the
+user agent or other fingerprints is out of scope (no evasion).
+
+`with-display.sh` starts Xvfb itself because `xvfb-run` hangs as a container's PID 1.
+
+
+## 2026-03-08 — Durable tasks: DBOS Transact 3.4.0, in the existing Postgres
+
+One workflow per task (`worker/engine.py`), queued with a global concurrency of 1 because
+the free worker runs one browser at a time. Chosen over Temporal (cluster to run or paid
+cloud) and Inngest (steps over HTTP, awkward when one process holds a browser). Pinned to
+3.4.0, not the 3.5.0 published the day before. Checked against the installed package:
+
+- DBOS creates its `dbos` schema itself, which the restricted `agent_worker` role cannot do,
+  so the `task_engine` migration creates it, owned by that role.
+- `register_queue` must be awaited from async code (`register_queue_async`).
+- `send` to a finished or unknown workflow raises; the engine treats that as "nothing to wake".
+
+Design points:
+- The `instructions` table is the inbox and the source of truth; `DBOS.send` is only a wake-up
+  so a paused task reacts at once instead of at its next 60 s poll. A text that arrives while
+  the worker is down is applied on restart.
+- Steps are at-least-once: after a kill, the step that was in flight may run again, completed
+  steps do not (`tests/test_durability.py` kills a real worker process to show it).
+- A paused task keeps the single queue slot, so later tasks wait behind it.
+- RESUME after a budget pause grants one more default allowance ($3). A text can therefore
+  authorise at most that much extra spend per resume.
+- HALT ALL sets `emergency_stop`; only the dashboard may clear it, so a spoofed text can stop
+  work but never restart it.
+- Task verbs avoid carrier opt-out words: `kill` (not cancel/stop), `halt` = pause.
+
+
 ## 2026-01-22 — The worker is the only database writer
 
 The voice agent (LiveKit Cloud) and the SMS webhook (Vercel) call the worker's internal API
@@ -50,6 +173,16 @@ inbound SMS by MessageSid, outbound SMS by `messages.dedupe_key`.
   Twilio's documented example.
 - `start_task` refuses in code until every detail heard below 0.85 transcription confidence
   has been read back and confirmed, and a summary has been agreed.
+
+New dependencies:
+- worker: `fastapi` + `uvicorn` (internal API), `psycopg[binary,pool]` (Postgres), `httpx`
+  (Twilio REST); dev `pytest-asyncio`.
+- `services/common` (`agent-common`): signing and the API's Pydantic contracts, shared so the
+  voice agent and worker cannot drift. Depends only on `pydantic`.
+- voice: `livekit-agents[deepgram,openai,silero]` 1.8 (Flux STT, gpt-4.1, Aura-2 TTS, VAD for
+  barge-in), `livekit-plugins-noise-cancellation` (BVCTelephony), `httpx`, `pydantic-settings`.
+- web: `server-only` (keeps server env access out of client bundles); dev `@playwright/test`.
+  Node 22+ is required (`@supabase/supabase-js` needs native WebSocket).
 
 
 ## 2026-01-13 — Worker dependencies
