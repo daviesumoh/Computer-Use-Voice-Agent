@@ -85,3 +85,84 @@ class CreateTaskResponse(_Strict):
 
 
 class InboundSmsRequest(_Strict):
+    message_sid: str = Field(min_length=1, max_length=64)
+    from_number: str = E164
+    body: str = Field(max_length=1600)
+
+
+class DecideApprovalRequest(_Strict):
+    decision: Literal["approved", "denied"]
+
+
+class ConnectAccountRequest(_Strict):
+    site_domain: str = Field(min_length=4, max_length=253)
+    label: str = Field(min_length=1, max_length=60)
+    username: str = Field(min_length=1, max_length=320)
+    password: str = Field(min_length=1, max_length=512)
+    allowed_origins: list[str] | None = None  # default: https://<domain> and https://www.<domain>
+
+
+class ConnectAccountResponse(_Strict):
+    account_id: UUID
+
+
+class RecallRequest(_Strict):
+    query: str = Field(min_length=1, max_length=500)
+
+
+class RecalledItem(_Strict):
+    id: UUID
+    kind: str  # fact, preference, rule, or an episode: call, task
+    text: str
+
+
+class RecallResponse(_Strict):
+    items: list[RecalledItem]
+
+
+class ForgetRequest(_Strict):
+    memory_ids: list[UUID] = Field(min_length=1, max_length=20)
+
+
+class ForgetResponse(_Strict):
+    forgotten: int
+
+
+class SettleMemoryRequest(_Strict):
+    memory_id: UUID
+    keep: bool
+
+
+class EditMemoryRequest(_Strict):
+    text: str = Field(min_length=3, max_length=500)
+
+
+class DeleteMemoryRequest(_Strict):
+    immediately: bool = False
+    with_sources: bool = False  # also delete the messages it was learned from
+
+
+class ClearMemoriesRequest(_Strict):
+    type: Literal["fact", "preference", "rule"] | None = None
+
+
+class MemoryEnabledRequest(_Strict):
+    enabled: bool
+
+
+class PushSubscribeRequest(_Strict):
+    """A browser's push subscription, as `PushSubscription.toJSON()` gives it."""
+
+    endpoint: str = Field(pattern=r"^https://", max_length=2048)
+    p256dh: str = Field(min_length=1, max_length=256)
+    auth: str = Field(min_length=1, max_length=64)
+
+
+class PushUnsubscribeRequest(_Strict):
+    endpoint: str = Field(pattern=r"^https://", max_length=2048)
+
+
+class TaskEditRequest(_Strict):
+    """Something the owner says to a running task during a call."""
+
+    text: str = Field(min_length=1, max_length=1000)
