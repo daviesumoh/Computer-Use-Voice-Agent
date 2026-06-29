@@ -1,3 +1,63 @@
+embedded, compared and shown.
+
+**Only the owner's words become memories.** After a call, `gpt-4.1-mini` proposes candidates
+with the exact span it relied on. Code then decides (`memory/gates.py`): the span must occur
+in something the owner said in that call, one-off requests are dropped, and anything that
+looks like a card or ID number, a password or PIN, a long token or a health detail is dropped
+(a deliberately blunt keyword list). Website text can never reach this path: task episodes are
+written from the title, the owner's summary and the outcome only. A habit seen once is stored
+as `pending_confirm`; after three sightings in two calls the agent asks once. A habit never
+overrides something the owner stated.
+
+**Changes.** An exact repeat refreshes the memory without a model call. Otherwise the new
+statement is compared with the five nearest memories (the model answers duplicate / refines /
+contradicts / unrelated per id; ids it invents are ignored). Contradicted memories are marked
+`superseded` and the owner is told once at the next call. "Refines" keeps both.
+
+**Search** (`memory/recall.py`): 0.5 meaning + 0.3 keywords + 0.2 recency, active memories
+only, 600-token budget. Admission needs cosine >= 0.25 and >= 0.75 of the best match; a
+keyword hit rescues a text only if it is also >= 0.25. On a labelled set of 20 memories and 15
+questions with the real embeddings (`pytest -m live -s`): precision 0.75, recall 0.90, and two
+unrelated questions returned nothing. The thresholds were tuned on that same set, so treat the
+numbers as optimistic. Keywords match any word, not all (`websearch_to_tsquery` ANDs them and
+missed most real questions). Live extraction on 10 utterances: 10/10 as expected (the gates
+caught a peanut-allergy statement the model proposed); a replaced rule was superseded.
+
+**Forgetting.** Forgetting hides a memory at once and erases it after the owner's undo window
+(24 hours, `user_settings.memory_undo_hours`; 0 or "erase now" is immediate). It also removes
+older wordings it replaced, and the summaries written while it was known. "Erase with its
+sources" deletes the messages it came from. Kept afterwards: a SHA-256 of the text, nothing
+else. A test searches the table, the keyword and vector indexes, sources, summaries, links and
+the audit log for the forgotten text. "Clear everything" also wipes all summaries and routes.
+An hourly loop in the worker erases expired ones; it is idempotent.
+
+**Where it runs.** Learning is two DBOS workflows on their own queue (concurrency 1), started
+when a call ends and when a task ends, with ids derived from the call / task so repeats attach
+to the first. Steps are at-least-once, so the job is written to be repeated safely.
+The voice agent gets a short card at call start (rules and preferences, 20 max) and three
+tools: `recall_memory`, `forget_memory`, `settle_memory`. The browser agent gets the rules
+and preferences that match its task, and a remembered route once it is on a site, shown
+inside `<earlier_route>` tags as data, not instructions. A route that was offered and then
+failed is marked stale. Pausing memory (dashboard) stops learning, recall, cards and routes.
+
+**Not built.** Retention periods per memory type; reading memories from SMS (only voice
+calls are learned from); episode summaries cannot be listed or deleted one by one (they go
+with a forgotten memory or "clear everything"); procedures are keyed by site and
+read/write only, not by task type, so a route is a hint about the site; no eval of a
+GPT-4.1-mini replacement yet (the model is configured via `WORKER_MEMORY_MODEL`).
+
+Dependencies: none new (the OpenAI client already present; pgvector is a Postgres extension).
+
+
+## 2026-06-29 — Approvals, accounts, takeover
+
+**Owner endpoints trust the owner's token, not the web server.** Approving, clearing the
+emergency stop and connecting or removing an account are called by the dashboard's browser
+directly, with the owner's Supabase access token. The worker has Supabase validate the token
+(`/auth/v1/user`: signature, expiry, revocation) and then reads `aal` and the latest `amr`
+TOTP timestamp from it (checked against the real local Auth service, ES256 tokens). Approving
+and the other sensitive actions need a TOTP code entered in the last 5 minutes; a password-only
+session gets 403 on everything. The checks run as dependencies, before the request body is
 parsed. Passwords therefore never pass through Vercel. Service-to-service calls (voice agent,
 SMS webhook) keep the HMAC signing.
 
