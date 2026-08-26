@@ -1,3 +1,56 @@
+**Deploy images.** Both Dockerfiles build from a folder that holds `common/` and the service side
+by side, because each service's pyproject resolves the shared package as `../common`. Worker:
+`docker build -f services/worker/Dockerfile services` (its default command is now the API
+server; the host-sizing check is `browser-smoke` as the command). Voice:
+`scripts/stage-voice.sh <folder>` copies both into one folder for `lk agent create`, which
+builds it on LiveKit Cloud. Both images were built and started locally (the worker answered
+`/healthz`; the voice image imports). Not done: a run of either image against real accounts.
+The worker reaches the hosted database through Supabase's session pooler (IPv4; the direct host
+is IPv6-only on the free plan) as the `agent_worker` role, whose password is set out of band.
+
+
+## 2026-09-25 — Self-health alerts and task limits
+
+**No fallbacks, by decision.** A failure is reported and the work stops; nothing switches to
+an alternate provider, host or route on its own. This replaces speech-provider fallback,
+host switching and similar paths. The GPT-4.1 / 4.1-mini replacement is also
+dropped by the owner's choice; both models shut down on 2027-01-14, after which the voice
+agent and memory extraction stop working unless the model settings are changed.
+
+**Alerts** (`health.py`): every 10 minutes the worker checks, per user, for 3+ failed tasks in
+a day, 2+ unexpected errors, any security stop, undelivered texts (failed, opted out, no
+number), a quarter of the monthly cap spent in a day, and 80% of the cap spent in the month.
+An alert opens once per kind, is texted once, shows on the dashboard task list and closes
+when the condition clears. The alert text can itself fail to send; the dashboard shows it
+regardless. Provider errors are counted through the failed tasks they cause, not separately.
+
+**Limits.** The monthly cap (`user_settings.monthly_cost_cap_cents`, default $150) now pauses
+a task before its next step and blocks `RESUME` while it is reached. Each task also pauses
+after 2 hours of working time (time spent in the executor, not waiting for approval or you);
+`RESUME` grants another 2 hours.
+
+**Proved locally.** Five simultaneous calls of 20 turns (110 requests): median 4 ms, p95 20
+ms, all turns stored. Three tasks queue and run one at a time in creation order. A browser that
+dies mid-task is replaced and the task continues from the last page. A backup restore drill
+(`scripts/restore-drill.sh`) restores the application schemas and matches row counts.
+The load numbers are the worker alone with no network and no speech or model latency.
+
+**Not done.** Backups on the hosted project (needs the Pro plan), and a restore drill against
+a hosted backup. A load test over real phone calls (needs Twilio and LiveKit). The
+interrupt-and-correct check is covered only as far as the conversation-state
+tests go (slot corrections); that only the played part of an interrupted sentence is stored
+is not tested, because it lives in the LiveKit session. A watchdog for
+orphaned Chromium processes.
+Runbooks are in `docs/runbooks.md`.
+
+
+## 2026-08-26 — Long-term memory
+
+**What is stored.** `memories` (fact / preference / rule, one sentence each, with an embedding
+and a keyword vector), `memory_sources` (the owner's own words each came from), `episodes`
+(a sentence per call or task), `procedures` (the last route that worked on a site) and
+`memory_events` (hashes only). pgvector 0.8 in the same Postgres; no separate vector store.
+No `subject / predicate / value` columns: nothing used them, and the sentence is what is
 embedded, compared and shown.
 
 **Only the owner's words become memories.** After a call, `gpt-4.1-mini` proposes candidates
