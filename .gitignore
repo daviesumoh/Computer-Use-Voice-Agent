@@ -1,19 +1,28 @@
-# Environment & secrets
 .env
 .env.*
 !.env.example
-
-# Python
+*.pem
+*.key
+bitwarden-state*
+node_modules/
+.next/
+out/
+dist/
+build/
+coverage/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+test-results/
+playwright-report/
+.venv/
 __pycache__/
 *.py[cod]
-.venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-
-# Node
-node_modules/
-.next/
-
-# OS
 .DS_Store
+Thumbs.db
+*.swp
+*~
+
