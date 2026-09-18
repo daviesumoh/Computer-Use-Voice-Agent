@@ -68,3 +68,26 @@ Hosted backups need the Pro plan (daily, 7 days) **(not exercised live)**. Pract
 on the local database any time:
 
     ./scripts/restore-drill.sh
+
+It dumps the `public` and `audit` schemas, restores them into a scratch database and compares
+row counts for the tables that matter. Expect exactly two `pg_restore` errors (schema `public`
+already exists, and the foreign key to `auth.users`); anything else, or a MISMATCH line, is a
+failure. After a real restore, run `supabase test db` against it, sign in, and check that
+`select count(*) from memories` and `approvals` look right. Restoring brings back forgotten
+memories that were erased after the backup was taken; forget them again.
+
+## Rotating secrets
+
+- **Service signing secret** (`WORKER_SERVICE_HMAC_SECRET`, shared with the voice agent and
+  the web app): change it in all three places in one go; requests in flight fail once.
+- **Bitwarden machine token:** revoke it in Bitwarden, create a new one, set
+  `WORKER_BITWARDEN_ACCESS_TOKEN`. Saved website passwords are unaffected.
+- **Saved-login key** (`WORKER_SESSION_KEY`): changing it makes every saved login unreadable;
+  tasks will ask you to sign in again by takeover.
+- **Twilio and OpenAI keys:** replace in the worker's environment and restart.
+
+## A login needs you (takeover)
+
+A task parked on a login, CAPTCHA or code sends a text with a dashboard link. Open the task,
+take over, finish the step, press Done. If the browser was lost meanwhile, the task reopens
+the last page and asks again.
