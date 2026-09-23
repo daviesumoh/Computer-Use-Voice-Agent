@@ -1,3 +1,39 @@
+ask ("1) by voice: ... 2) by text: ... reply 1, 2 or 3"); until the owner answers, neither
+applies. That asks more often than strictly needed, by design. Purchases and sends still need
+the dashboard approval either way.
+
+**After a takeover.** Pressing Done is refused once if the page still shows a verification page
+or a password field; "Continue anyway" overrides it.
+
+**Browsers.** Every 5 minutes the worker closes browsers whose task is no longer running or
+waiting for the owner. It does not scan for Chromium processes of a crashed worker; Playwright
+ties a browser's life to its parent.
+
+**Live dashboard.** The task list, task page and approvals subscribe to Supabase Realtime
+(`tasks`, `task_events`, `approvals`, `alerts`) and re-render on change; row-level security and
+the aal2 rule apply to what a session receives.
+
+**Web push.** Alongside every text (approval needed, login needed, task done, alerts) the worker
+pushes the same message to the browsers the owner enabled; the dashboard's "Turn on
+notifications" registers one. Texts stay the base channel (no timer-based fallback from push to
+text, by decision). Dependency: `pywebpush` (VAPID signing and payload encryption; pulls in
+`aiohttp`, `http-ece`, `py-vapid`). Generate keys with `scripts/generate-vapid-keys.py`. Not
+verified: delivery to a real browser (needs a deployed worker and a VAPID key pair); on iPhone
+push works only for a dashboard added to the home screen, and the manifest has no icons yet.
+
+**Pictures.** The agent works from text; a picture costs several ordinary steps, so it is the
+model's choice, helped by two cheap signals from the page: the browser notes say when the page
+holds a drawn canvas, a large graphic, or a large image with no description, and when the text
+view is under 250 characters. A hint alone is not a reason to look (the prompt says so, and a
+live test checks a page with a chart and a price in text). `look` photographs the viewport and a
+separate tool-less model answers one question about it, as `extract` does for text, so only its
+answer reaches the main model and an instruction written inside an image cannot steer the
+browser. Limits in code: 6 pictures per task, and none of a page that has not changed since
+the last one. Never taken where a sign-in form or a value typed from the secret store is
+visible; password fields are masked. Measured with the real model: it asked for a picture of a
+canvas-painted figure and read it correctly; it did not ask on a text page, nor on a text page
+that also had a chart. Pictures are not saved or shown in the dashboard yet.
+
 **Deploy images.** Both Dockerfiles build from a folder that holds `common/` and the service side
 by side, because each service's pyproject resolves the shared package as `../common`. Worker:
 `docker build -f services/worker/Dockerfile services` (its default command is now the API
