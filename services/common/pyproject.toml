@@ -7,15 +7,15 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "pydantic>=2.10",
+    "pydantic>=2.12",
 ]
 
 [build-system]
-requires = ["uv_build>=0.6.0,<0.13.0"]
+requires = ["uv_build>=0.12.1,<0.13.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["pytest>=8.3.0", "ruff>=0.9.0", "mypy>=1.14.0"]
+dev = ["pytest>=9.2.0", "ruff>=0.17.4", "mypy>=2.4.1"]
 
 [tool.ruff]
 line-length = 100
