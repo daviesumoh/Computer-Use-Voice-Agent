@@ -9,24 +9,24 @@ requires-python = ">=3.12"
 dependencies = [
     "agent-common",
     "httpx>=0.28.1",
-    "livekit-agents[deepgram,openai,silero]~=1.0.0",
-    "livekit-plugins-noise-cancellation~=0.2.0",
-    "pydantic-settings>=2.7.0",
+    "livekit-agents[deepgram,openai,silero]~=1.8.11",
+    "livekit-plugins-noise-cancellation~=0.3.3",
+    "pydantic-settings>=2.16.2",
 ]
 
 [project.scripts]
 voice = "voice:main"
 
 [build-system]
-requires = ["uv_build>=0.6.0,<0.13.0"]
+requires = ["uv_build>=0.12.1,<0.13.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "mypy>=1.14.0",
-    "pytest>=8.3.0",
-    "pytest-asyncio>=0.25.0",
-    "ruff>=0.9.0",
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "ruff>=0.17.4",
     "worker",
 ]
 
