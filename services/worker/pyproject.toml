@@ -1,71 +1,70 @@
 [project]
-name = "agent-worker"
+name = "worker"
 version = "0.1.0"
-description = "Browser and task worker for the computer-use voice agent."
-requires-python = ">=3.12,<3.14"
+description = "Background worker for the voice computer-use agent"
+authors = [
+    { name = "Davies", email = "daviesumoh000@gmail.com" }
+]
+requires-python = ">=3.12"
 dependencies = [
-  "agent-common",
-  "playwright==1.50.0",
-  "pydantic>=2.10,<3",
-  "pydantic-settings>=2.7,<3",
-  "logfire>=3.0,<4",
-  "fastapi>=0.115,<1",
-  "uvicorn>=0.34,<1",
-  "psycopg[binary,pool]>=3.2,<4",
-  "httpx>=0.28,<1",
-  "dbos==3.4.0",
-  "openai>=1.65,<2",
-  "cryptography>=44.0,<46",
-  "bitwarden-sdk==2.1.0",
-  "pywebpush>=2.5.0,<3",
+    "agent-common",
+    "bitwarden-sdk==2.1.0",
+    "cryptography>=50.0.2",
+    "dbos==3.4.0",
+    "fastapi>=0.162.4",
+    "httpx>=0.28.1",
+    "logfire>=5.5.0",
+    "openai>=3.49.0",
+    "playwright>=1.65.0",
+    "psycopg[binary,pool]>=3.3.8",
+    "pydantic-settings>=2.16.2",
+    "pywebpush>=2.5.0",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [project.scripts]
 browser-smoke = "worker.browser_smoke:main"
-worker-api = "worker.api:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-  "pytest>=8.3",
-  "pytest-asyncio>=0.25",
-  "ruff>=0.9",
-  "mypy>=1.14",
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "ruff>=0.17.4",
 ]
-
-[tool.uv.sources]
-agent-common = { path = "../common", editable = true }
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/worker"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "ASYNC", "S", "SIM", "RUF"]
-ignore = ["S101"]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S105", "S106", "S603"]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "BLE"]
 
 [tool.mypy]
-python_version = "3.12"
 strict = true
-mypy_path = "src"
-packages = ["worker"]
+files = ["src", "tests"]
+mypy_path = "src:../common/src"
+
+[[tool.mypy.overrides]]
+module = ["bitwarden_sdk", "pywebpush"]
+ignore_missing_imports = true  # these ship no type information
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "../common/src"]
 asyncio_mode = "auto"
-addopts = "-m 'not live and not load'"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
-  "live: calls external services (OpenAI) and costs a few cents",
-  "load: concurrent-call and multi-task load checks",
+  "db: needs the local Supabase stack running (supabase start)",
+  "browser: launches a real Chromium (needs `playwright install chromium`)",
+  "live: calls OpenAI with WORKER_OPENAI_API_KEY and costs a few cents; run with `-m live -s`",
+  "load: concurrency run against the local stack; takes a minute (run with `-m load -s`)",
 ]
+addopts = "-m 'not live and not load'"
+
+[tool.uv.sources]
+agent-common = { path = "../common", editable = true }

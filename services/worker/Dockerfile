@@ -1,7 +1,7 @@
 # Build from the services/ directory, so the shared package is in the build context:
 #   docker build -f worker/Dockerfile -t worker .
 # Version must match the playwright pin in uv.lock: the image ships the matching browsers.
-FROM mcr.microsoft.com/playwright/python:v1.50.0-noble
+FROM mcr.microsoft.com/playwright/python:v1.65.0-noble
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.1 /uv /usr/local/bin/uv
 
