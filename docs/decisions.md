@@ -1,3 +1,49 @@
+# Decisions
+
+One entry per decision or dependency, with the reason. Newest first.
+
+## 2026-11-11 — Prices, replies by text, push, live updates, perception evals
+
+**Why canadiantire.ca showed no prices.** Its own price service (`.../PriceAvailability`) answers
+this browser with HTTP 403 (bot protection), so the page never receives prices; the search and
+product pages otherwise load. One earlier run did load prices, so the refusal is intermittent.
+There is no fix that is not evasion, and none was attempted. What changed: the session reports
+"the site refused a background request (403)" to the model, which now says prices were
+withheld after 2 steps (1.8 cents) instead of searching for 13 steps (27 cents). A real person
+taking over the browser may let the site relax; that is untested.
+
+**Cost of a page.** A shop search page is ~190,000 characters of accessibility tree. The model
+sees `snapshot.compact` of it, capped at 24,000 characters: text already in a link's name is not
+repeated in nested elements, empty wrappers, cursor hints and tracking query strings are dropped,
+long boilerplate lines are cut at 200 characters. That removed 40% of the size with no
+interactive element lost (checked on the real page and in tests).
+
+**Late content.** Shops draw prices after the network is quiet. Before each look the session waits
+until the page text has not changed for 1.5 seconds (at most 8). The cost is up to 1.5 seconds per
+step; a page that draws later than that shows as "Loading" and the model can wait.
+
+**Reading pages (30 labelled pages, live model).** First run 58% correct: the tool-less reader was
+given `innerText`, which skips shadow DOM and iframes and does not show a ticked checkbox or a
+selected option, and the quiet wait was 1 second. Reading from the accessibility tree and the
+longer wait gave 96% of the 26 answerable questions and 4 of 4 absent answers reported as absent
+(cost 1.4 cents). The remaining miss is content that draws after 2.5 seconds. PDFs are not
+read at all (the browser's PDF viewer is not handled); the pages are synthetic, not saved
+real ones.
+
+**Multi-store comparison, live.** "1TB NVMe SSD on canadacomputers.com, newegg.ca, staples.ca":
+real prices and stock status from all three, 19 model calls, 34 cents; Staples' refused
+background request was reported. A drill comparison on bestbuy.ca (Access Denied), homedepot.ca
+(no usable prices) and staples.ca returned the Staples prices and said what was missing; a run
+including memoryexpress.com stopped at its Cloudflare check and handed over to the owner.
+
+**Replies by text.** Any text that is not a command is, for the one active task (or `T7 ...`),
+either the answer to the task's question (if it is waiting to ask one) or a note, stored as an
+instruction and applied at the next step; notes are added to the task's spec as `owner_edits`,
+which the model reads as later instructions from the owner. `yes`/`approve` while a task awaits
+approval is answered with a pointer to the dashboard: texts can be spoofed and never approve.
+Carrier opt-out words are never notes. During a call the voice agent has `edit_task`.
+**Voice versus text.** Free text has no slots to compare, so nothing here can tell whether two
+notes contradict. Two notes from different channels within 60 seconds make the task stop and
 ask ("1) by voice: ... 2) by text: ... reply 1, 2 or 3"); until the owner answers, neither
 applies. That asks more often than strictly needed, by design. Purchases and sends still need
 the dashboard approval either way.
