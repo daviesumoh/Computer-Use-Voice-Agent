@@ -11,8 +11,8 @@ from pydantic import BaseModel
 from worker.browser.actions import Action
 from worker.browser.session import Observation
 
-# USD per million tokens: (input, cached input, output). Source: OpenAI model page, 2026-04.
-PRICES: dict[str, tuple[float, float, float]] = {"gpt-4.1": (2.0, 0.50, 8.0)}
+# USD per million tokens: (input, cached input, output). Source: OpenAI model page, 2026-11.
+PRICES: dict[str, tuple[float, float, float]] = {"gpt-6.1-sol": (2.0, 0.10, 10.0)}
 
 SYSTEM_PROMPT = """\
 You operate a web browser for one person, to carry out the task they gave you.

@@ -37,7 +37,7 @@ class Settings(BaseSettings):
 
     # Browser tasks. Without a key the worker still runs; tasks then fail as "executor_unavailable".
     openai_api_key: SecretStr | None = None
-    browser_model: str = "gpt-4.1"
+    browser_model: str = "gpt-6.1-sol"
     # Retail sites refuse headless Chromium (see docs/decisions.md), so production runs headed
     # on a virtual display; headless is for development machines and tests.
     browser_headless: bool = False
