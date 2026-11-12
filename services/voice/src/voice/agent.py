@@ -163,7 +163,6 @@ async def entrypoint(ctx: JobContext) -> None:
     settings: Settings = load_settings()
     http = httpx.AsyncClient(base_url=settings.worker_url, timeout=5)
     worker = WorkerClient(http, settings.service_hmac_secret.get_secret_value())
-    ctx.add_shutdown_callback(http.aclose)
 
     await ctx.connect()
     caller_participant = await ctx.wait_for_participant(
@@ -176,6 +175,7 @@ async def entrypoint(ctx: JobContext) -> None:
     except UnknownCallerError:
         log.info("refusing call from unknown number")
         ctx.shutdown("unknown caller")  # room closes; nothing is said to an unverified caller
+        await http.aclose()
         return
 
     agent = PhoneAgent(caller, worker)
@@ -220,8 +220,13 @@ async def entrypoint(ctx: JobContext) -> None:
     @session.on("close")
     def _on_close(event: CloseEvent) -> None:
         async def finish() -> None:
-            await asyncio.gather(*pending, return_exceptions=True)
-            await worker.end_call(caller.conversation_id, event.reason.value)
+            # Shutdown callbacks run concurrently, so the client is closed here, after the
+            # last request, rather than in a callback of its own.
+            try:
+                await asyncio.gather(*pending, return_exceptions=True)
+                await worker.end_call(caller.conversation_id, event.reason.value)
+            finally:
+                await http.aclose()
 
         ctx.add_shutdown_callback(finish)
 
